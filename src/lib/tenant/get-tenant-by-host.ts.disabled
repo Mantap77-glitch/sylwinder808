@@ -1,0 +1,66 @@
+import { headers } from "next/headers";
+import { prisma } from "@/lib/prisma";
+
+function cleanHost(host: string) {
+  return host
+    .toLowerCase()
+    .replace(/^https?:\/\//, "")
+    .replace(/^www\./, "")
+    .split("/")[0]
+    .split(":")[0];
+}
+
+export async function getTenantByHost() {
+  const headerStore = await headers();
+
+  const rawHost =
+    headerStore.get("x-forwarded-host") ||
+    headerStore.get("host") ||
+    "";
+
+  const host = cleanHost(rawHost);
+
+  const domain = await prisma.domain.findUnique({
+    where: {
+      host,
+    },
+    include: {
+      tenant: true,
+    },
+  });
+
+  if (domain?.tenant) {
+    return {
+      tenant: domain.tenant,
+      domain,
+      host,
+    };
+  }
+
+  /**
+   * Fallback local development.
+   * Supaya http://localhost:3000 tetap bisa tampil.
+   */
+  if (host === "localhost" || host === "127.0.0.1") {
+    const tenant = await prisma.tenant.findFirst({
+      where: {
+        status: "ACTIVE",
+      },
+      orderBy: {
+        createdAt: "asc",
+      },
+    });
+
+    if (!tenant) {
+      return null;
+    }
+
+    return {
+      tenant,
+      domain: null,
+      host,
+    };
+  }
+
+  return null;
+}

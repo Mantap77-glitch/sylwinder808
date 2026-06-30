@@ -1,0 +1,304 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum Role {
+  SUPER_ADMIN
+  CLIENT_ADMIN
+  STAFF
+  PLAYER
+}
+
+enum TransactionType {
+  DEPOSIT
+  WITHDRAW
+  TRANSFER
+  ADJUSTMENT
+}
+
+enum TransactionStatus {
+  NEW
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+enum ManualTransactionMethod {
+  BANK
+  EWALLET
+  PULSA
+}
+
+enum ManualTransactionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum BankType {
+  BANK
+  EWALLET
+  PULSA
+  QRIS
+}
+
+enum DomainStatus {
+  ACTIVE
+  INACTIVE
+  MAINTENANCE
+}
+
+model Tenant {
+  id        String   @id @default(cuid())
+  name      String
+  code      String   @unique
+  status    String   @default("ACTIVE")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users              User[]
+  banks              Bank[]
+  transactions       Transaction[]
+  siteSettings       SiteSetting[]
+  banners            Banner[]
+  domains            Domain[]
+  templates          Template[]
+  auditLogs          AuditLog[]
+  manualTransactions ManualTransaction[]
+}
+
+model User {
+  id       String  @id @default(cuid())
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  email        String
+  username     String
+  passwordHash String?
+  role         Role     @default(PLAYER)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  playerProfile       PlayerProfile?
+  paymentAccounts     PaymentAccount[]
+  transactions        Transaction[]       @relation("PlayerTransactions")
+  createdTransactions Transaction[]       @relation("AdminTransactions")
+  manualTransactions  ManualTransaction[]
+
+  @@unique([tenantId, email])
+  @@unique([tenantId, username])
+}
+
+model PlayerProfile {
+  id           String   @id @default(cuid())
+  userId       String   @unique
+  phone        String
+  loyaltyXp    Int      @default(0)
+  loyaltyPoint Int      @default(0)
+  balance      Decimal  @default(0) @db.Decimal(18, 2)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Bank {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  name          String
+  code          String
+  type          BankType @default(BANK)
+  accountName   String?
+  accountNumber String?
+  adminFee      String?
+  iconUrl       String?
+  isActive      Boolean  @default(true)
+  sortOrder     Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  paymentAccounts PaymentAccount[]
+
+  @@unique([tenantId, code])
+}
+
+model PaymentAccount {
+  id            String   @id @default(cuid())
+  userId        String
+  bankId        String
+  accountName   String
+  accountNumber String
+  isPrimary     Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bank Bank @relation(fields: [bankId], references: [id])
+
+  @@index([userId])
+  @@index([bankId])
+}
+
+model Transaction {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  invoiceNo String            @unique
+  playerId  String
+  adminId   String?
+  type      TransactionType
+  status    TransactionStatus @default(NEW)
+  amount    Decimal           @db.Decimal(18, 2)
+  note      String?
+  proofUrl  String?
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+
+  player User  @relation("PlayerTransactions", fields: [playerId], references: [id])
+  admin  User? @relation("AdminTransactions", fields: [adminId], references: [id])
+
+  @@index([tenantId])
+  @@index([playerId])
+  @@index([adminId])
+}
+
+model ManualTransaction {
+  id       String                  @id @default(cuid())
+  tenantId String
+  username String
+  type     TransactionType         @default(DEPOSIT)
+  method   ManualTransactionMethod
+  status   ManualTransactionStatus @default(PENDING)
+
+  amount Decimal @db.Decimal(18, 2)
+
+  originAccount String?
+  targetBankId  String?
+  targetAccount String?
+
+  serialNumber String?
+  adminFee     String?
+  proofUrl     String?
+
+  rejectReason String?
+  reviewedById String?
+  reviewedAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant     Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  reviewedBy User?  @relation(fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, status])
+  @@index([tenantId, username])
+}
+
+model SiteSetting {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  siteName         String   @default("NAMA")
+  logoUrl          String?
+  faviconUrl       String?
+  liveChatUrl      String?
+  whatsappNumber   String?
+  whatsappUrl      String?
+  telegramUsername String?
+  telegramUrl      String?
+  activeTemplate   String   @default("default")
+  maintenanceMode  Boolean  @default(false)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@unique([tenantId])
+}
+
+model Banner {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  title     String
+  subtitle  String?
+  imageUrl  String?
+  href      String?
+  placement String   @default("landing")
+  isActive  Boolean  @default(true)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
+}
+
+model Domain {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  host      String       @unique
+  status    DomainStatus @default(ACTIVE)
+  isPrimary Boolean      @default(false)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  @@index([tenantId])
+}
+
+model Template {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  key         String
+  name        String
+  description String?
+  config      Json     @default("{}")
+  isActive    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([tenantId, key])
+}
+
+model Game {
+  id           String   @id @default(cuid())
+  name         String
+  slug         String   @unique
+  category     String
+  provider     String
+  thumbnailUrl String?
+  isActive     Boolean  @default(true)
+  sortOrder    Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model AuditLog {
+  id       String  @id @default(cuid())
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  actorId   String?
+  action    String
+  entity    String
+  entityId  String?
+  metadata  Json     @default("{}")
+  createdAt DateTime @default(now())
+
+  @@index([tenantId])
+  @@index([actorId])
+}

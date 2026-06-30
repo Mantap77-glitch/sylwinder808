@@ -1,0 +1,28 @@
+import { NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+import { z } from "zod";
+
+const siteSchema = z.object({
+  siteName: z.string().min(2),
+  logoUrl: z.string().optional().nullable(),
+  faviconUrl: z.string().optional().nullable(),
+  liveChatUrl: z.string().optional().nullable(),
+  whatsappUrl: z.string().optional().nullable(),
+  telegramUrl: z.string().optional().nullable(),
+  activeTemplate: z.string().default("default"),
+  maintenanceMode: z.boolean().default(false),
+});
+
+export async function GET() {
+  return NextResponse.json(await prisma.siteSetting.findFirst());
+}
+
+export async function PUT(req: Request) {
+  const parsed = siteSchema.safeParse(await req.json());
+  if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+  const current = await prisma.siteSetting.findFirst();
+  const data = current
+    ? await prisma.siteSetting.update({ where: { id: current.id }, data: parsed.data })
+    : await prisma.siteSetting.create({ data: parsed.data });
+  return NextResponse.json(data);
+}

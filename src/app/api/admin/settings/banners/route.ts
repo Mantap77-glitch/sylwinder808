@@ -1,69 +1,16 @@
+import { NextResponse } from "next/server";
 import { mkdir, writeFile } from "fs/promises";
 import path from "path";
-
-import { NextResponse } from "next/server";
 
 import { API_ENDPOINTS } from "@/lib/api/api-endpoints";
 import { BackendApiError, serverApi } from "@/lib/api/server-api";
 import { getAdminSession } from "@/lib/auth/admin-session";
 
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
 const uploadDir = path.join(process.cwd(), "public", "uploads", "banners");
 const MAX_FILE_SIZE = 5 * 1024 * 1024;
-
-function cleanOptional(value?: FormDataEntryValue | null) {
-  if (!value) return null;
-
-  const text = String(value).trim();
-
-  return text.length > 0 ? text : null;
-}
-
-function toBoolean(value: FormDataEntryValue | null, fallback = true) {
-  if (value === null) return fallback;
-
-  return String(value) === "true";
-}
-
-function toNumber(value: FormDataEntryValue | null) {
-  const numberValue = Number(value || 0);
-
-  return Number.isNaN(numberValue) ? 0 : numberValue;
-}
-
-async function saveBannerFile(file: File | null, req: Request) {
-  if (!file || file.size === 0) {
-    return null;
-  }
-
-  if (!file.type.startsWith("image/")) {
-    throw new Error("File harus berupa gambar.");
-  }
-
-  if (file.size > MAX_FILE_SIZE) {
-    throw new Error("Ukuran banner maksimal 5MB.");
-  }
-
-  await mkdir(uploadDir, {
-    recursive: true,
-  });
-
-  const bytes = await file.arrayBuffer();
-  const buffer = Buffer.from(bytes);
-
-  const extension = file.name.split(".").pop() || "jpg";
-  const safeExtension = extension.toLowerCase().replace(/[^a-z0-9]/g, "");
-  const fileName = `banner-${Date.now()}-${crypto.randomUUID()}.${
-    safeExtension || "jpg"
-  }`;
-
-  const filePath = path.join(uploadDir, fileName);
-
-  await writeFile(filePath, buffer);
-
-  const origin = process.env.NEXT_PUBLIC_SITE_URL || new URL(req.url).origin;
-
-  return `${origin.replace(/\/+$/, "")}/uploads/banners/${fileName}`;
-}
 
 function getBackendMessage(error: unknown, fallback: string) {
   if (error instanceof BackendApiError) {
@@ -99,7 +46,91 @@ function getBackendStatus(error: unknown, fallback = 400) {
   return fallback;
 }
 
-async function getClientSession() {
+function getAppOrigin(req: Request) {
+  const envUrl = process.env.NEXT_PUBLIC_SITE_URL;
+
+  if (envUrl) {
+    const cleanUrl = envUrl.trim().replace(/\/$/, "");
+
+    if (cleanUrl.startsWith("http://") || cleanUrl.startsWith("https://")) {
+      return cleanUrl;
+    }
+
+    return `https://${cleanUrl}`;
+  }
+
+  const host =
+    req.headers.get("x-forwarded-host") || req.headers.get("host") || "";
+
+  const protocol = req.headers.get("x-forwarded-proto") || "https";
+
+  return `${protocol}://${host}`.replace(/\/$/, "");
+}
+
+function cleanOptional(value?: FormDataEntryValue | null) {
+  if (!value) return null;
+
+  const text = String(value).trim();
+
+  return text.length > 0 ? text : null;
+}
+
+function toBoolean(value: FormDataEntryValue | null) {
+  const text = String(value || "").toLowerCase();
+
+  return text === "true" || text === "1" || text === "on";
+}
+
+function toNumber(value: FormDataEntryValue | null) {
+  const numberValue = Number(value || 0);
+
+  return Number.isNaN(numberValue) ? 0 : numberValue;
+}
+
+function isValidFile(value: unknown): value is File {
+  return value instanceof File && value.size > 0;
+}
+
+function makeUploadFileName(file: File) {
+  const extension = file.name.split(".").pop() || "jpg";
+  const safeExtension = extension.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+  return `banner-${Date.now()}-${crypto.randomUUID()}.${
+    safeExtension || "jpg"
+  }`;
+}
+
+async function saveBannerFile(req: Request, file: unknown) {
+  if (!isValidFile(file)) {
+    return null;
+  }
+
+  if (!file.type.startsWith("image/")) {
+    throw new Error("File harus berupa gambar.");
+  }
+
+  if (file.size > MAX_FILE_SIZE) {
+    throw new Error("Ukuran gambar maksimal 5MB.");
+  }
+
+  await mkdir(uploadDir, {
+    recursive: true,
+  });
+
+  const fileName = makeUploadFileName(file);
+  const filePath = path.join(uploadDir, fileName);
+
+  const bytes = await file.arrayBuffer();
+  const buffer = Buffer.from(bytes);
+
+  await writeFile(filePath, buffer);
+
+  const appOrigin = getAppOrigin(req);
+
+  return `${appOrigin}/uploads/banners/${fileName}`;
+}
+
+async function getClientAdminSession() {
   const session = await getAdminSession();
 
   if (
@@ -114,40 +145,42 @@ async function getClientSession() {
   return session;
 }
 
-function buildPayload({
-  formData,
-  imageUrl,
-  includeImage,
-}: {
-  formData: FormData;
-  imageUrl: string | null;
-  includeImage: boolean;
-}) {
-  const title = String(formData.get("title") || "").trim();
-  const subtitle = cleanOptional(formData.get("subtitle"));
-  const href = cleanOptional(formData.get("href"));
-  const placement = String(formData.get("placement") || "").trim();
-  const isActive = toBoolean(formData.get("isActive"), true);
-  const sortOrder = toNumber(formData.get("sortOrder"));
+export async function GET() {
+  try {
+    const session = await getClientAdminSession();
 
-  return {
-    title,
-    subtitle,
-    href,
-    placement,
-    isActive,
-    sortOrder,
-    ...(includeImage && imageUrl
-      ? {
-          imageUrl,
-        }
-      : {}),
-  };
+    if (!session) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "Akses ditolak.",
+        },
+        { status: 403 }
+      );
+    }
+
+    const result = await serverApi(API_ENDPOINTS.admin.banners, {
+      method: "GET",
+      token: session.token,
+    });
+
+    return NextResponse.json(result);
+  } catch (error) {
+    console.error("GET_BANNERS_PROXY_ERROR:", error);
+
+    return NextResponse.json(
+      {
+        success: false,
+        message: getBackendMessage(error, "Gagal mengambil banner."),
+      },
+      { status: getBackendStatus(error, 400) }
+    );
+  }
 }
 
 export async function POST(req: Request) {
   try {
-    const session = await getClientSession();
+    const session = await getClientAdminSession();
 
     if (!session) {
       return NextResponse.json(
@@ -162,8 +195,12 @@ export async function POST(req: Request) {
     const formData = await req.formData();
 
     const title = String(formData.get("title") || "").trim();
+    const subtitle = cleanOptional(formData.get("subtitle"));
+    const href = cleanOptional(formData.get("href"));
     const placement = String(formData.get("placement") || "").trim();
-    const imageFile = formData.get("imageFile") as File | null;
+    const isActive = toBoolean(formData.get("isActive"));
+    const sortOrder = toNumber(formData.get("sortOrder"));
+    const imageFile = formData.get("imageFile");
 
     if (!title) {
       return NextResponse.json(
@@ -185,28 +222,25 @@ export async function POST(req: Request) {
       );
     }
 
-    const imageUrl = await saveBannerFile(imageFile, req);
+    const imageUrl = await saveBannerFile(req, imageFile);
 
     const result = await serverApi(API_ENDPOINTS.admin.banners, {
       method: "POST",
       token: session.token,
-      body: buildPayload({
-        formData,
+      body: {
+        title,
+        subtitle,
         imageUrl,
-        includeImage: Boolean(imageUrl),
-      }),
+        href,
+        placement,
+        isActive,
+        sortOrder,
+      },
     });
 
-    return NextResponse.json(
-      {
-        success: true,
-        message: "Banner berhasil ditambahkan.",
-        data: result,
-      },
-      { status: 201 }
-    );
+    return NextResponse.json(result, { status: 201 });
   } catch (error) {
-    console.error("CREATE_BANNER_ERROR:", error);
+    console.error("CREATE_BANNER_PROXY_ERROR:", error);
 
     return NextResponse.json(
       {
@@ -220,7 +254,7 @@ export async function POST(req: Request) {
 
 export async function PATCH(req: Request) {
   try {
-    const session = await getClientSession();
+    const session = await getClientAdminSession();
 
     if (!session) {
       return NextResponse.json(
@@ -236,8 +270,12 @@ export async function PATCH(req: Request) {
 
     const id = String(formData.get("id") || "").trim();
     const title = String(formData.get("title") || "").trim();
+    const subtitle = cleanOptional(formData.get("subtitle"));
+    const href = cleanOptional(formData.get("href"));
     const placement = String(formData.get("placement") || "").trim();
-    const imageFile = formData.get("imageFile") as File | null;
+    const isActive = toBoolean(formData.get("isActive"));
+    const sortOrder = toNumber(formData.get("sortOrder"));
+    const imageFile = formData.get("imageFile");
 
     if (!id) {
       return NextResponse.json(
@@ -269,25 +307,29 @@ export async function PATCH(req: Request) {
       );
     }
 
-    const imageUrl = await saveBannerFile(imageFile, req);
+    const uploadedImageUrl = await saveBannerFile(req, imageFile);
 
     const result = await serverApi(API_ENDPOINTS.admin.bannerDetail(id), {
       method: "PATCH",
       token: session.token,
-      body: buildPayload({
-        formData,
-        imageUrl,
-        includeImage: Boolean(imageUrl),
-      }),
+      body: {
+        title,
+        subtitle,
+        href,
+        placement,
+        isActive,
+        sortOrder,
+        ...(uploadedImageUrl
+          ? {
+              imageUrl: uploadedImageUrl,
+            }
+          : {}),
+      },
     });
 
-    return NextResponse.json({
-      success: true,
-      message: "Banner berhasil diperbarui.",
-      data: result,
-    });
+    return NextResponse.json(result);
   } catch (error) {
-    console.error("UPDATE_BANNER_ERROR:", error);
+    console.error("UPDATE_BANNER_PROXY_ERROR:", error);
 
     return NextResponse.json(
       {
@@ -301,7 +343,7 @@ export async function PATCH(req: Request) {
 
 export async function DELETE(req: Request) {
   try {
-    const session = await getClientSession();
+    const session = await getClientAdminSession();
 
     if (!session) {
       return NextResponse.json(
@@ -331,21 +373,14 @@ export async function DELETE(req: Request) {
       token: session.token,
     });
 
-    return NextResponse.json({
-      success: true,
-      message: "Banner berhasil dihapus.",
-      data: result,
-    });
+    return NextResponse.json(result);
   } catch (error) {
-    console.error("DELETE_BANNER_ERROR:", error);
+    console.error("DELETE_BANNER_PROXY_ERROR:", error);
 
     return NextResponse.json(
       {
         success: false,
-        message: getBackendMessage(
-          error,
-          "Gagal menghapus banner. Pastikan backend sudah menyediakan DELETE /api/admin/settings/banners/[id]."
-        ),
+        message: getBackendMessage(error, "Gagal menghapus banner."),
       },
       { status: getBackendStatus(error, 400) }
     );

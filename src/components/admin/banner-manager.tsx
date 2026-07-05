@@ -130,7 +130,7 @@ formData.append("isActive", form.isActive);
 formData.append("sortOrder", form.sortOrder || "0");
 
 if (imageFile) {
-  formData.append("imageFile", imageFile);
+  formData.append("image", imageFile);
 }
 
 const response = await fetch("/api/admin/settings/banners", {

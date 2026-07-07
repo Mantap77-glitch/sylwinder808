@@ -45,6 +45,7 @@ export function BrandingForm({
     try {
       const response = await fetch("/api/admin/settings/branding", {
         method: "PATCH",
+        credentials: "include",
         body: formData,
       });
 
